@@ -155,7 +155,6 @@ TEST(KernelTest, TestChar16IsLockFree) {
         char name[16];
     } IfaceValue;
 
-    // Known to currently fail on RiscV, likely needs better compiler/libraries.
     ASSERT_TRUE(std::atomic<IfaceValue>::is_always_lock_free);
 }
 
