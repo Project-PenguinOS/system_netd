@@ -1165,7 +1165,7 @@ static bool interfaceHasAddress(
     }
 
     for (struct ifaddrs *addr = ifaddrsList; addr != nullptr; addr = addr->ifa_next) {
-        if (std::string(addr->ifa_name) != ifname ||
+        if (addr->ifa_name == nullptr || std::string((char* _Nonnull)addr->ifa_name) != ifname ||
             addr->ifa_addr == nullptr ||
             addr->ifa_addr->sa_family != addrinfoList->ai_addr->sa_family) {
             continue;
@@ -4014,7 +4014,7 @@ TEST_F(NetdBinderTest, TestServiceDump) {
     testData.push_back(
             {StringPrintf("networkAddRouteParcel(65123, RouteInfoParcel{destination:"
                           " 2001:db8:dead:beef::/64, ifName: %s, nextHop: fe80::dead:beef,"
-                          " mtu: 1234})",
+                          " mtu: 1234, isLocalRoute: false})",
                           sTun.name().c_str()),
              "networkAddRouteParcel.*65123.*dead:beef"});
 
