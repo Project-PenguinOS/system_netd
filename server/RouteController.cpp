@@ -36,9 +36,13 @@
 #include <android-base/file.h>
 #include <android-base/stringprintf.h>
 #include <android-base/strings.h>
+#include <android_net_platform_flags.h>
+
 #include "log/log.h"
 #include "netid_client.h"
 #include "netutils/ifc.h"
+
+namespace netflags = android::net::platform::flags;
 
 using android::base::StartsWith;
 using android::base::StringPrintf;
@@ -1199,6 +1203,8 @@ int RouteController::modifyRoute(uint16_t action, uint16_t flags, const char* in
 }
 
 static void maybeModifyQdiscClsact(const char* interface, bool add) {
+    if (netflags::connectivity_service_modify_qdisc_clsact()) return;
+
     // The clsact attaching of v4- tun interface is triggered by ClatdController::maybeStartBpf
     // because the clat is started before the v4- interface is added to the network and the
     // clat startup needs to add {in, e}gress filters.
