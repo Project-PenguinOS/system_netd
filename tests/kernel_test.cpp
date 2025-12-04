@@ -85,6 +85,10 @@ bool isCuttlefish() {
     return GetProperty("ro.product.board", "") == "cutf";
 }
 
+bool isDesktop() {
+    return GetProperty("ro.boot.hardware", "") == "android-desktop";
+}
+
 }  // namespace
 
 /**
@@ -237,6 +241,11 @@ TEST(KernelTest, TestSupportsUsbCdcHost) {
     KernelConfigVerifier configVerifier;
     // TODO: Load these modules on cuttlefish.
     if (isCuttlefish()) GTEST_SKIP() << "Exempt on cuttlefish";
+
+    // All desktop devices use kernel uevents for module autoloading,
+    // thus support for USB ethernet dongles is already verified by
+    // the KernelTest#TestSupportsCommonUsbEthernetDongles.
+    if (isDesktop()) GTEST_SKIP() << "Exempt on desktop device";
 
     EXPECT_TRUE(configVerifier.isAvailable("CONFIG_USB_NET_CDC_NCM", "cdc_ncm"));
     EXPECT_TRUE(configVerifier.isAvailable("CONFIG_USB_NET_CDC_EEM", "cdc_eem"));

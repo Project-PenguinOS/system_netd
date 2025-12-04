@@ -154,16 +154,18 @@ NetworkController::NetworkController() :
     mNetworks[DUMMY_NET_ID] = new DummyNetwork(DUMMY_NET_ID);
     mNetworks[UNREACHABLE_NET_ID] = new UnreachableNetwork(UNREACHABLE_NET_ID);
 
-    // Clear all clsact stubs on all interfaces.
-    // TODO: perhaps only remove the clsact on the interface which is added by
-    // RouteController::addInterfaceToPhysicalNetwork. Currently, the netd only
-    // attach the clsact to the interface for the physical network.
-    const auto& ifaces = getIfaceNames();
-    if (isOk(ifaces)) {
-        for (const std::string& iface : ifaces.value()) {
-            if (int ifIndex = if_nametoindex(iface.c_str())) {
-                // Ignore the error because the interface might not have a clsact.
-                tcQdiscDelDevClsact(ifIndex);
+    if (!netflags::connectivity_service_modify_qdisc_clsact()) {
+        // Clear all clsact stubs on all interfaces.
+        // TODO: perhaps only remove the clsact on the interface which is added by
+        // RouteController::addInterfaceToPhysicalNetwork. Currently, the netd only
+        // attach the clsact to the interface for the physical network.
+        const auto& ifaces = getIfaceNames();
+        if (isOk(ifaces)) {
+            for (const std::string& iface : ifaces.value()) {
+                if (int ifIndex = if_nametoindex(iface.c_str())) {
+                    // Ignore the error because the interface might not have a clsact.
+                    tcQdiscDelDevClsact(ifIndex);
+                }
             }
         }
     }
