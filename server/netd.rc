@@ -1,3 +1,6 @@
+on bpf-progs-loaded
+    start netd
+
 service netd /system/bin/netd
     disabled # only started once bpf programs are loaded
     class main
