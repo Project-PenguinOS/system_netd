@@ -120,12 +120,7 @@ bool initDnsResolver() {
 
 }  // namespace
 
-int main(const int argc, const char* argv[]) {
-    if ((argc == 2) && !strcmp(argv[1], "oneshot")) {
-        setenv("NETD_ONESHOT", "1", 1);
-        return libnetd_updatable_init("/sys/fs/cgroup");
-    }
-
+int main() {
     Stopwatch s;
     gLog.info("netd starting");
 
