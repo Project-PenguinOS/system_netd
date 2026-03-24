@@ -579,60 +579,7 @@ TEST_F(NetdBinderTest, XfrmControllerInit) {
     ASSERT_TRUE(XfrmController::ipSecRemoveTunnelInterface("ipsec_test").ok());
 }
 
-// Two kernel fixes have been added in 5.17 to allow XFRM_MIGRATE to work correctly
-// when (1) there are multiple tunnels with the same selectors; and (2) addresses
-// are updated to a different IP family. These two fixes were pulled into upstream
-// LTS releases 4.14.273, 4.19.236, 5.4.186, 5.10.107 and 5.15.30, from whence they
-// flowed into the Android Common Kernel (via standard LTS merges).
-// As such we require 4.14.273+, 4.19.236+, 5.4.186+, 5.10.107+, 5.15.30+ and 5.17+
-// to have these fixes.
-bool hasXfrmMigrateKernelFixes() {
-    return (isAtLeastKernelVersion(4, 14, 273) && !isAtLeastKernelVersion(4, 19, 0)) ||
-           (isAtLeastKernelVersion(4, 19, 236) && !isAtLeastKernelVersion(5, 4, 0)) ||
-           (isAtLeastKernelVersion(5, 4, 186) && !isAtLeastKernelVersion(5, 10, 0)) ||
-           (isAtLeastKernelVersion(5, 10, 107) && !isAtLeastKernelVersion(5, 15, 0)) ||
-           isAtLeastKernelVersion(5, 15, 30);
-}
-
-// Does the kernel support CONFIG_XFRM_MIGRATE and include the kernel fixes?
-bool supportsXfrmMigrate() {
-    if (!hasXfrmMigrateKernelFixes()) return false;
-
-    // 5.10+ VINTF requires CONFIG_XFRM_MIGRATE enabled
-    if (isAtLeastKernelVersion(5, 10, 0)) return true;
-
-    const std::string wildcardAddr = "::";
-
-    // Expect migration to fail with EINVAL because it is trying to migrate a
-    // non-existent SA.
-    auto status = XfrmController::ipSecMigrate(
-            0 /* resourceId */, AF_INET6, 0 /* direction == out */,
-            wildcardAddr /* sourceAddress */, wildcardAddr /* destinationAddress */,
-            wildcardAddr /* newSourceAddress */, wildcardAddr /* newDestinationAddress */,
-            0 /* xfrmInterfaceId */);
-
-    if (android::netdutils::equalToErrno(status, EINVAL)) {
-        return true;
-    } else if (android::netdutils::equalToErrno(status, ENOPROTOOPT)) {
-        return false;
-    } else {
-        GTEST_LOG_(WARNING) << "Unexpected migration result: "
-                            << android::netdutils::toString(status)
-                            << "Assuming XFRM_MIGRATE is enabled.";
-        return true;
-    }
-}
-
-#define SKIP_IF_XFRM_MIGRATE_NOT_SUPPORTED                                     \
-    do {                                                                       \
-        if (!supportsXfrmMigrate())                                            \
-            GTEST_SKIP() << "This test is skipped since xfrm migrate feature " \
-                         << "not supported\n";                                 \
-    } while (0)
-
 TEST_F(NetdBinderTest, XfrmMigrate) {
-    SKIP_IF_XFRM_MIGRATE_NOT_SUPPORTED;
-
     static const struct TestData {
         const int32_t addrFamily;
         const int32_t newAddrFamily;
@@ -2377,6 +2324,14 @@ TEST_F(NetdBinderTest, BandwidthSetGlobalAlert) {
     expectBandwidthGlobalAlertRuleExists(testAlertBytes);
 }
 
+namespace {
+bool canBindSocketToNetwork(int uid, int netId) {
+    ScopedUidChange scopedUidChange(uid);
+    unique_fd testSocket(socket(AF_INET6, SOCK_DGRAM | SOCK_CLOEXEC, 0));
+    return !setNetworkForSocket(netId, testSocket.get());
+}
+}  // namespace
+
 TEST_F(NetdBinderTest, NetworkAddRemoveRouteUserPermission) {
     static const struct {
         const char* ipVersion;
@@ -2417,11 +2372,30 @@ TEST_F(NetdBinderTest, NetworkAddRemoveRouteUserPermission) {
     const int testUid = randomUid();
     const std::vector<int32_t> testUids = {testUid};
 
-    // Add test physical network
-    const auto& config = makeNativeNetworkConfig(TEST_NETID1, NativeNetworkType::PHYSICAL,
+    // Add test physical networks
+    const auto config1 = makeNativeNetworkConfig(TEST_NETID1, NativeNetworkType::PHYSICAL,
                                                  INetd::PERMISSION_NONE, false, false);
-    EXPECT_TRUE(mNetd->networkCreate(config).isOk());
+    EXPECT_TRUE(mNetd->networkCreate(config1).isOk());
     EXPECT_TRUE(mNetd->networkAddInterface(TEST_NETID1, sTun.name()).isOk());
+
+    const auto config2 = makeNativeNetworkConfig(TEST_NETID2, NativeNetworkType::PHYSICAL,
+                                                 INetd::PERMISSION_SYSTEM, false, false);
+    EXPECT_TRUE(mNetd->networkCreate(config2).isOk());
+    EXPECT_TRUE(mNetd->networkAddInterface(TEST_NETID2, sTun2.name()).isOk());
+
+    // Unprivileged test UID cannot bind to restricted networks.
+    EXPECT_TRUE(canBindSocketToNetwork(testUid, TEST_NETID1));
+    EXPECT_FALSE(canBindSocketToNetwork(testUid, TEST_NETID2));
+
+    // Add system permission for test uid, check it can bind to restricted network.
+    EXPECT_TRUE(mNetd->networkSetPermissionForUser(INetd::PERMISSION_SYSTEM, testUids).isOk());
+    EXPECT_TRUE(canBindSocketToNetwork(testUid, TEST_NETID1));
+    EXPECT_TRUE(canBindSocketToNetwork(testUid, TEST_NETID2));
+
+    // Remove system permission for test uid, check it cannot bind to restricted network.
+    EXPECT_TRUE(mNetd->networkClearPermissionForUser(testUids).isOk());
+    EXPECT_TRUE(canBindSocketToNetwork(testUid, TEST_NETID1));
+    EXPECT_FALSE(canBindSocketToNetwork(testUid, TEST_NETID2));
 
     // Setup route for testing nextHop
     for (size_t i = 0; i < std::size(kTestDataWithNextHop); i++) {
@@ -2435,7 +2409,7 @@ TEST_F(NetdBinderTest, NetworkAddRemoveRouteUserPermission) {
         expectNetworkRouteExists(td.ipVersion, sTun.name(), td.testDest, td.testNextHop,
                                  sTun.name().c_str());
 
-        // Add system permission for test uid, setup route in legacy system table.
+        // Add system permission for test uid, setup route to next hop in legacy system table.
         EXPECT_TRUE(mNetd->networkSetPermissionForUser(INetd::PERMISSION_SYSTEM, testUids).isOk());
 
         status = mNetd->networkAddLegacyRoute(TEST_NETID1, sTun.name(), td.testDest, td.testNextHop,
@@ -2444,7 +2418,7 @@ TEST_F(NetdBinderTest, NetworkAddRemoveRouteUserPermission) {
         expectNetworkRouteExists(td.ipVersion, sTun.name(), td.testDest, td.testNextHop,
                                  testTableLegacySystem);
 
-        // Remove system permission for test uid, setup route in legacy network table.
+        // Remove system permission for test uid, setup route to next hop in legacy network table.
         EXPECT_TRUE(mNetd->networkClearPermissionForUser(testUids).isOk());
 
         status = mNetd->networkAddLegacyRoute(TEST_NETID1, sTun.name(), td.testDest, td.testNextHop,
@@ -2456,6 +2430,9 @@ TEST_F(NetdBinderTest, NetworkAddRemoveRouteUserPermission) {
 
     for (size_t i = 0; i < std::size(kTestData); i++) {
         const auto& td = kTestData[i];
+
+        SCOPED_TRACE(StringPrintf("Legacy route to %s via %s: expecting %s", td.testDest,
+                                  td.testNextHop, td.expectSuccess ? "success" : "error"));
 
         android::net::RouteInfoParcel parcel =
                 createRouteParcel(sTun.name(), td.testDest, td.testNextHop);
@@ -2625,8 +2602,9 @@ TEST_F(NetdBinderTest, NetworkAddRemoveRouteUserPermission) {
                                               std::to_string(parcel.mtu), sTun.name().c_str());
     }
 
-    // Remove test physical network
+    // Remove test physical networks
     EXPECT_TRUE(mNetd->networkDestroy(TEST_NETID1).isOk());
+    EXPECT_TRUE(mNetd->networkDestroy(TEST_NETID2).isOk());
 }
 
 TEST_F(NetdBinderTest, NetworkPermissionDefault) {
